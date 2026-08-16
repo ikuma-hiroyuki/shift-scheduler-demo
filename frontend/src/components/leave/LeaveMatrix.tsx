@@ -191,7 +191,10 @@ export default function LeaveMatrix({
           該当する従業員がいません
         </div>
       ) : (
-        <table className="text-xs border-separate border-spacing-0 table-fixed min-w-full">
+        <table
+          className="text-xs border-separate border-spacing-0 table-fixed min-w-full"
+          style={{ width: `${110 + dayHeaders.length * 28}px` }}
+        >
           <colgroup>
             <col style={{ width: '110px' }} />
             {dayHeaders.map(({ day }) => (

@@ -269,9 +269,13 @@ describe('LeaveMatrix — cell editing', () => {
 describe('LeaveMatrix — mobile overflow', () => {
   // Regression: ISSUE-001 — 30日分の日付列が table-fixed + w-full + 幅未指定の
   // col で狭い画面幅に押し潰され、日付ヘッダーが判読不能になっていた。
+  // table-layout: fixed は table 自身の width が非 auto の定長値でない限り
+  // 無視され自動レイアウトにフォールバックするため、colgroup に幅を与える
+  // だけでは不十分 — table 自身にも明示的な px 幅が必要（min-width: 100% と
+  // 併用してコンテナ幅を超えない場合は引き伸ばす）。
   // Found by /qa on 2026-08-16
   // Report: .gstack/qa-reports/qa-report-shift-scheduler-demo-pages-dev-2026-08-16.md
-  it('gives every day column an explicit width so the table overflows its wrapper instead of shrinking', async () => {
+  it('gives the table an explicit definite width so table-layout:fixed actually applies', async () => {
     render(<LeaveMatrix {...defaultProps()} />)
     await waitForRows()
 
@@ -283,5 +287,10 @@ describe('LeaveMatrix — mobile overflow', () => {
     dayCols.forEach((col) => {
       expect((col as HTMLElement).style.width).not.toBe('')
     })
+
+    // The definite width table-layout:fixed needs — without this, browsers
+    // silently fall back to auto layout and the col widths above are ignored.
+    const expectedWidth = 110 + dayCols.length * 28
+    expect(table.style.width).toBe(`${expectedWidth}px`)
   })
 })

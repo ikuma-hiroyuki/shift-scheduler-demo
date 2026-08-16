@@ -398,12 +398,15 @@ export default function ShiftGrid({ schedule, onFinalize }: Props) {
         }
         style={{ scrollPaddingTop: '36px' }}
       >
-        <table className="border-collapse text-[11px] shift-grid-table min-w-full table-fixed">
+        <table
+          className="border-collapse text-[11px] shift-grid-table min-w-full table-fixed"
+          style={{ width: `${88 + 56 + days.length * 22 + 36 + 36}px` }}
+        >
           <colgroup>
             <col style={{ width: '88px' }} />
             <col style={{ width: '56px' }} />
             {days.map((d) => (
-              <col key={d} style={{ width: '32px' }} />
+              <col key={d} style={{ width: '22px' }} />
             ))}
             <col style={{ width: '36px' }} />
             <col style={{ width: '36px' }} />
