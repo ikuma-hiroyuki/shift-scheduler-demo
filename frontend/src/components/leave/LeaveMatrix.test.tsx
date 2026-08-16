@@ -263,3 +263,25 @@ describe('LeaveMatrix — cell editing', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+
+describe('LeaveMatrix — mobile overflow', () => {
+  // Regression: ISSUE-001 — 30日分の日付列が table-fixed + w-full + 幅未指定の
+  // col で狭い画面幅に押し潰され、日付ヘッダーが判読不能になっていた。
+  // Found by /qa on 2026-08-16
+  // Report: .gstack/qa-reports/qa-report-shift-scheduler-demo-pages-dev-2026-08-16.md
+  it('gives every day column an explicit width so the table overflows its wrapper instead of shrinking', async () => {
+    render(<LeaveMatrix {...defaultProps()} />)
+    await waitForRows()
+
+    const table = screen.getByRole('table')
+    expect(table.className).not.toMatch(/(^| )w-full( |$)/)
+
+    const dayCols = table.querySelectorAll('colgroup col + col')
+    expect(dayCols.length).toBeGreaterThan(0)
+    dayCols.forEach((col) => {
+      expect((col as HTMLElement).style.width).not.toBe('')
+    })
+  })
+})
