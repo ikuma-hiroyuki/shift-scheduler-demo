@@ -32,6 +32,9 @@ beforeAll(() => {
     stub._stub = true
     window.scrollTo = stub
   }
+  if (typeof Element.prototype.scrollIntoView !== 'function') {
+    Element.prototype.scrollIntoView = vi.fn()
+  }
 })
 
 afterEach(() => {

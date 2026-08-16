@@ -13,6 +13,17 @@ function getRecaptchaSiteKey(): string | undefined {
   return typeof key === 'string' && key.length > 0 ? key : undefined
 }
 
+function getDemoCredentials(): { email: string; password: string } | undefined {
+  // ポートフォリオデモ専用。VITE_DEMO_EMAIL / VITE_DEMO_PASSWORD 両方が
+  // 設定されているときだけログイン画面にデモアカウントを案内する。
+  const email = import.meta.env.VITE_DEMO_EMAIL
+  const password = import.meta.env.VITE_DEMO_PASSWORD
+  if (typeof email === 'string' && email.length > 0 && typeof password === 'string' && password.length > 0) {
+    return { email, password }
+  }
+  return undefined
+}
+
 export default function LoginPage() {
   const navigate = useNavigate()
   const setToken = useAuthStore((s) => s.setToken)
@@ -22,6 +33,13 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const recaptchaRef = useRef<ReCAPTCHA | null>(null)
   const siteKey = getRecaptchaSiteKey()
+  const demoCredentials = getDemoCredentials()
+
+  function fillDemoCredentials() {
+    if (!demoCredentials) return
+    setEmail(demoCredentials.email)
+    setPassword(demoCredentials.password)
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -88,6 +106,21 @@ export default function LoginPage() {
         </div>
         <h1 className="text-2xl font-bold text-brand-900 mb-1 text-center">稼働表管理システム</h1>
         <p className="text-sm text-ink-muted text-center mb-6">ログイン</p>
+
+        {demoCredentials && (
+          <button
+            type="button"
+            onClick={fillDemoCredentials}
+            className="w-full text-left text-xs bg-brand-50 border border-brand-200 rounded-lg px-3 py-2 mb-4 hover:bg-brand-100 transition-colors"
+          >
+            <p className="font-medium text-brand-900 mb-0.5">
+              デモアカウント（クリックで自動入力）
+            </p>
+            <p className="text-ink-muted">
+              {demoCredentials.email} / {demoCredentials.password}
+            </p>
+          </button>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>

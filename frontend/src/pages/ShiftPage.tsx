@@ -346,7 +346,7 @@ export default function ShiftPage() {
 
         {/* Matrix (full width) */}
         {departmentId !== null && (
-          <div className="space-y-4">
+          <div className="space-y-4" data-tour="leave-matrix">
             <LeaveMatrix
               departmentId={departmentId}
               year={year}
@@ -378,7 +378,7 @@ export default function ShiftPage() {
                 onImported={() => setMatrixReloadToken((n) => n + 1)}
               />
 
-              <div className="bg-cream-50 border border-ink/10 rounded-sm">
+              <div className="bg-cream-50 border border-ink/10 rounded-sm" data-tour="generate-panel">
                 <div className="px-6 py-4 border-b border-ink/10 flex items-baseline justify-between">
                   <h3
                     className="text-base font-medium text-brand-900"

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/auth'
+import { useOnboardingStore } from '../stores/onboarding'
 import ThemePicker from './ThemePicker'
+import TourOverlay from './onboarding/TourOverlay'
 import { useSidebarPatternStore } from '../stores/sidebarPattern'
 import { patternBackgroundImage } from '../constants/sidebarPatterns'
 import logoUrl from '../assets/images/logo.svg'
@@ -9,6 +11,8 @@ import logoUrl from '../assets/images/logo.svg'
 interface NavItem {
   to: string
   label: string
+  /** data-tour 属性値。オンボーディングツアーが対象を見つけるためのフック。 */
+  tourId: string
   icon: React.ReactNode
 }
 
@@ -16,6 +20,7 @@ const NAV: NavItem[] = [
   {
     to: '/shift',
     label: '稼働表',
+    tourId: 'nav-shift',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor">
         <rect x="3" y="5" width="18" height="16" rx="2" />
@@ -26,6 +31,7 @@ const NAV: NavItem[] = [
   {
     to: '/employees',
     label: '従業員',
+    tourId: 'nav-employees',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor">
         <circle cx="12" cy="8" r="3.5" />
@@ -36,6 +42,7 @@ const NAV: NavItem[] = [
   {
     to: '/work-patterns',
     label: '作業パターン',
+    tourId: 'nav-work-patterns',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3.5" y="4.5" width="7" height="7" rx="1" />
@@ -48,6 +55,7 @@ const NAV: NavItem[] = [
   {
     to: '/employee-priorities',
     label: '優先パターン',
+    tourId: 'nav-employee-priorities',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 3l2.6 5.6 6.1.6-4.6 4.2 1.3 6L12 16.8 6.6 19.4l1.3-6L3.3 9.2l6.1-.6L12 3z" />
@@ -57,6 +65,7 @@ const NAV: NavItem[] = [
   {
     to: '/day-templates',
     label: '日テンプレート',
+    tourId: 'nav-day-templates',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3.5" y="5.5" width="17" height="14" rx="1.5" />
@@ -69,6 +78,7 @@ const NAV: NavItem[] = [
   {
     to: '/choice-groups',
     label: '選択グループ',
+    tourId: 'nav-choice-groups',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="7" cy="9" r="3" />
@@ -81,6 +91,7 @@ const NAV: NavItem[] = [
   {
     to: '/pattern-triggers',
     label: '発生条件',
+    tourId: 'nav-pattern-triggers',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 3v3" />
@@ -98,6 +109,7 @@ const ADMIN_NAV: NavItem[] = [
   {
     to: '/admin/users',
     label: 'ユーザー管理',
+    tourId: 'nav-admin-users',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="9" cy="9" r="3" />
@@ -110,6 +122,7 @@ const ADMIN_NAV: NavItem[] = [
   {
     to: '/admin/roles',
     label: '役職',
+    tourId: 'nav-admin-roles',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
         <path d="M4 6h16" />
@@ -127,9 +140,12 @@ const STORAGE_KEY = 'sidebar_collapsed'
 
 export default function Layout() {
   const navigate = useNavigate()
+  const location = useLocation()
   const logout = useAuthStore((s) => s.logout)
   const currentUser = useAuthStore((s) => s.currentUser)
   const sidebarPatternId = useSidebarPatternStore((s) => s.patternId)
+  const hasSeenTour = useOnboardingStore((s) => s.hasSeenTour)
+  const startTour = useOnboardingStore((s) => s.start)
   const [collapsed, setCollapsed] = useState<boolean>(
     () => localStorage.getItem(STORAGE_KEY) === '1',
   )
@@ -138,6 +154,15 @@ export default function Layout() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0')
   }, [collapsed])
+
+  // 初回ログイン後、稼働表ページに到達したタイミングでオンボーディングツアーを自動開始する。
+  // /shift 限定なのは、ツアー後半のステップがそのページの DOM を対象にしているため。
+  useEffect(() => {
+    if (!hasSeenTour && location.pathname === '/shift') {
+      startTour()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSeenTour, location.pathname])
 
   function handleLogout() {
     logout()
@@ -240,6 +265,7 @@ export default function Layout() {
               end={item.to === '/shift'}
               onClick={() => setMobileOpen(false)}
               title={collapsed ? item.label : undefined}
+              data-tour={item.tourId}
               className={({ isActive }) =>
                 `group relative flex items-center gap-3 px-3 py-2.5 rounded-md transition-all ${
                   collapsed ? 'justify-center' : ''
@@ -282,6 +308,7 @@ export default function Layout() {
                   to={item.to}
                   onClick={() => setMobileOpen(false)}
                   title={collapsed ? item.label : undefined}
+                  data-tour={item.tourId}
                   className={({ isActive }) =>
                     `group relative flex items-center gap-3 px-3 py-2.5 rounded-md transition-all ${
                       collapsed ? 'justify-center' : ''
@@ -314,6 +341,23 @@ export default function Layout() {
         </nav>
 
         <div className={`px-3 py-3 border-t border-white/15 ${collapsed ? 'flex justify-center' : ''}`}>
+          <button
+            onClick={() => {
+              setMobileOpen(false)
+              if (location.pathname !== '/shift') navigate('/shift')
+              startTour()
+            }}
+            title={collapsed ? 'ツアーを見る' : undefined}
+            className={`text-xs text-white/80 hover:text-white transition-colors flex items-center gap-2 ${
+              collapsed ? 'p-2' : 'w-full px-2 py-1'
+            }`}
+          >
+            <TourIcon />
+            {!collapsed && <span>ツアーを見る</span>}
+          </button>
+        </div>
+
+        <div className={`px-3 py-3 border-t border-white/15 ${collapsed ? 'flex justify-center' : ''}`}>
           <ThemePicker collapsed={collapsed} />
         </div>
 
@@ -341,6 +385,8 @@ export default function Layout() {
       <main className="flex-1 min-w-0 pt-12 md:pt-0">
         <Outlet />
       </main>
+
+      <TourOverlay />
     </div>
   )
 }
@@ -371,6 +417,15 @@ function LogoutIcon() {
     <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
       <path d="M14 4h5v16h-5" />
       <path d="M3 12h11m0 0l-4-4m4 4l-4 4" />
+    </svg>
+  )
+}
+function TourIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 shrink-0" strokeWidth="1.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .7-1 1.4v.3" />
+      <circle cx="12" cy="16.5" r="0.5" fill="currentColor" />
     </svg>
   )
 }
