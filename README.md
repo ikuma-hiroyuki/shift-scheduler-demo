@@ -1003,11 +1003,14 @@ wrangler login
 wrangler pages project create <name> --production-branch main
 
 cd frontend
-VITE_API_URL=https://<render-service>.onrender.com npm run build
+VITE_API_URL=https://<render-service>.onrender.com \
+VITE_DEMO_EMAIL=admin@example.com \
+VITE_DEMO_PASSWORD=<ADMIN_PASSWORD と同じ値> \
+  npm run build
 wrangler pages deploy dist --project-name <name> --branch main
 ```
 
-`VITE_API_URL` は Vite のビルド時に静的に埋め込まれる値なので、Render の URL が変わった場合は再ビルド＋再デプロイが必要（Cloudflare Pages ダッシュボードで Git 連携している場合はビルド環境変数として設定する）。
+`VITE_API_URL` / `VITE_DEMO_EMAIL` / `VITE_DEMO_PASSWORD` はいずれも Vite のビルド時に静的に埋め込まれる値なので、値を変えた場合は再ビルド＋再デプロイが必要（Cloudflare Pages ダッシュボードで Git 連携している場合はビルド環境変数として設定する）。`VITE_DEMO_EMAIL`/`VITE_DEMO_PASSWORD` は両方設定するとログイン画面にデモアカウント案内バナーが出る（任意、ポートフォリオ公開時のみ推奨）。
 
 ### 動作確認
 
