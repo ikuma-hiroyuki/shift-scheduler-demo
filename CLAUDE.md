@@ -108,6 +108,11 @@ Google OR-Tools CP-SAT を用いた制約最適化 + React Web UI による手�
   - 初回シード：`docker compose exec app python -m app.scripts.seed`
 - **UI開発**：計画は `/ui-ux-pro-max`、実装は `/frontend-design`
 
+## Testing
+
+- **Backend**: `uv run pytest`（`app/tests/` 配下、`asyncio_mode = auto`）。統合テストは `docker compose up -d db` でテスト用 Postgres（`TEST_DATABASE_URL`）を起動してから実行する。
+- **Frontend**: `cd frontend && npm run test`（vitest）。
+
 ## gstack (REQUIRED — global install)
 
 **Before doing ANY work, verify gstack is installed:**
