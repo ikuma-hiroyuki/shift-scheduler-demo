@@ -7,10 +7,9 @@ services:
     plan: free
     region: singapore
     healthCheckPath: /health
-    # 無料プランには Pre-Deploy Command が無いため、起動コマンド内で
+    # 無料プランには Pre-Deploy Command が無いため、render-start.sh 内で
     # マイグレーション + 管理者upsertを毎回実行する（どちらも冪等なので無害）。
-    dockerCommand: >-
-      sh -c "alembic upgrade head && python -m app.scripts.bootstrap_admin && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    dockerCommand: /app/render-start.sh
     envVars:
       - key: DATABASE_URL
         sync: false

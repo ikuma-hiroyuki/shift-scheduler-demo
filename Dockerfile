@@ -14,4 +14,6 @@ FROM base AS dev
 RUN uv pip install --system --no-cache pytest pytest-asyncio httpx
 
 FROM base AS prod
+COPY render-start.sh /app/render-start.sh
+RUN chmod +x /app/render-start.sh
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
