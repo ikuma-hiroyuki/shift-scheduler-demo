@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+asyncpg://demomart:demomart@localhost:5432/demomart"
-    redis_url: str = "redis://localhost:6379/0"
     secret_key: str = _DEFAULT_SECRET_KEY
     access_token_expire_minutes: int = 60 * 24 * 7
     debug: bool = False

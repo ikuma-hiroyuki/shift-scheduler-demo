@@ -14,15 +14,12 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://demomart:demomart@db:5432/demomart
-      REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-changeme-in-production}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
       RECAPTCHA_SECRET: ${RECAPTCHA_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
-      redis:
-        condition: service_started
     restart: unless-stopped
 
   db:
@@ -40,26 +37,5 @@ services:
       timeout: 5s
       retries: 5
 
-  worker:
-    build: .
-    command: arq app.tasks.worker.WorkerSettings
-    environment:
-      DATABASE_URL: postgresql+asyncpg://demomart:demomart@db:5432/demomart
-      REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:-changeme-in-production}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-
 volumes:
   postgres_data:
-  redis_data:

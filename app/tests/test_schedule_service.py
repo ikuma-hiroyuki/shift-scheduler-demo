@@ -1,7 +1,8 @@
 """
 schedule_service の単体テスト。
 
-enqueue_generation は ARQ 接続を要するため monkeypatch でスタブする。
+enqueue_generation はバックグラウンドタスクを起動するため、
+_spawn_generation_task を monkeypatch でスタブする。
 """
 from __future__ import annotations
 
@@ -95,21 +96,7 @@ async def test_enqueue_generation_increments_attempt(
     _, session = client
     d1, _ = two_depts
 
-    # ARQ 接続をスタブ化
-    class _StubRedis:
-        async def enqueue_job(self, *_args, **_kwargs):
-            return None
-
-        async def aclose(self):
-            return None
-
-    async def _fake_pool(_settings):
-        return _StubRedis()
-
-    monkeypatch.setattr(schedule_service, "__name__", schedule_service.__name__)
-    # arq.create_pool を patch
-    import arq
-    monkeypatch.setattr(arq, "create_pool", _fake_pool)
+    monkeypatch.setattr(schedule_service, "_spawn_generation_task", lambda *a, **k: None)
 
     # 既存スケジュールを直接 INSERT
     session.add(ShiftSchedule(
@@ -138,18 +125,7 @@ async def test_enqueue_generation_first_attempt(
     _, session = client
     d1, _ = two_depts
 
-    class _StubRedis:
-        async def enqueue_job(self, *_args, **_kwargs):
-            return None
-
-        async def aclose(self):
-            return None
-
-    async def _fake_pool(_settings):
-        return _StubRedis()
-
-    import arq
-    monkeypatch.setattr(arq, "create_pool", _fake_pool)
+    monkeypatch.setattr(schedule_service, "_spawn_generation_task", lambda *a, **k: None)
 
     sch = await schedule_service.enqueue_generation(
         session, department_id=d1.id, year=2027, month=1,
@@ -165,18 +141,7 @@ async def test_enqueue_generation_persists_time_limit(
     _, session = client
     d1, _ = two_depts
 
-    class _StubRedis:
-        async def enqueue_job(self, *_args, **_kwargs):
-            return None
-
-        async def aclose(self):
-            return None
-
-    async def _fake_pool(_settings):
-        return _StubRedis()
-
-    import arq
-    monkeypatch.setattr(arq, "create_pool", _fake_pool)
+    monkeypatch.setattr(schedule_service, "_spawn_generation_task", lambda *a, **k: None)
 
     sch = await schedule_service.enqueue_generation(
         session, department_id=d1.id, year=2027, month=2, time_limit=180.0,
@@ -192,18 +157,7 @@ async def test_enqueue_generation_default_time_limit(
     _, session = client
     d1, _ = two_depts
 
-    class _StubRedis:
-        async def enqueue_job(self, *_args, **_kwargs):
-            return None
-
-        async def aclose(self):
-            return None
-
-    async def _fake_pool(_settings):
-        return _StubRedis()
-
-    import arq
-    monkeypatch.setattr(arq, "create_pool", _fake_pool)
+    monkeypatch.setattr(schedule_service, "_spawn_generation_task", lambda *a, **k: None)
 
     sch = await schedule_service.enqueue_generation(
         session, department_id=d1.id, year=2027, month=3,

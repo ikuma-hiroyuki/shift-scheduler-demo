@@ -47,7 +47,6 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://demomart:demomart@localhost:5432/demomart_test
           DATABASE_URL: postgresql+asyncpg://demomart:demomart@localhost:5432/demomart
-          REDIS_URL: redis://localhost:6379/0
           SECRET_KEY: ci-test-secret
         run: |
           pytest --cov --cov-report=xml --cov-report=term

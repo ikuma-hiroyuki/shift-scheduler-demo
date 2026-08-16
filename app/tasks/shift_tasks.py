@@ -1,11 +1,11 @@
 """
-app/tasks/shift_tasks.py — ARQ 非同期稼働表生成タスク
+app/tasks/shift_tasks.py — FastAPI プロセス内で実行する稼働表生成タスク
 
 冪等性保証:
   - 実行開始時に status = GENERATING に更新
   - 既に GENERATING / GENERATED の場合は何もしない
   - 成功時に status = GENERATED、失敗時 (CP-SAT 解なし / 入力構築エラー) は INFEASIBLE
-  - 停止要求 (Redis: schedule:cancel:{id}) があれば solver.stop_search() を呼び CANCELLED
+  - 停止要求 (schedule_service のプロセス内キャンセルフラグ) があれば solver.stop_search() を呼び CANCELLED
 """
 from __future__ import annotations
 
@@ -30,37 +30,26 @@ from app.optimizer.loader import (
     build_shift_model_input,
     preflight_priority_master,
 )
-from app.services.schedule_service import cancel_key
+from app.services.schedule_service import clear_cancel_flag, is_cancel_requested
 
 logger = logging.getLogger(__name__)
 
-# cancel フラグ Redis ポーリング間隔。短いほど停止反応が良い／Redis 負荷増。
+# cancel フラグのポーリング間隔。短いほど停止反応が良い／CPU 負荷増。
 _CANCEL_POLL_INTERVAL_SEC = 1.0
-# issue #196: heartbeat 更新間隔。短いほど worker 異常検出が速いが DB 書き込み増。
+# issue #196: heartbeat 更新間隔。短いほど異常検出が速いが DB 書き込み増。
 # stale 判定の閾値 (`_STALE_HEARTBEAT_FACTOR * time_limit`, 最低 30 秒) より十分小さくする。
 _HEARTBEAT_INTERVAL_SEC = 10.0
 
 
-async def _is_cancel_requested(redis, schedule_id: int) -> bool:
-    """Redis に cancel フラグが立っているか確認する。"""
-    try:
-        val = await redis.get(cancel_key(schedule_id))
-    except Exception:
-        # Redis 障害時は安全側（cancel と扱わない）
-        return False
-    return val is not None
-
-
 async def _watch_and_stop(
-    redis,
     schedule_id: int,
     solver: cp_model.CpSolver,
     cancelled: dict,
     stop_event: asyncio.Event,
 ) -> None:
-    """solver 実行中に Redis フラグを監視し、立ったら solver.stop_search() を呼ぶ。"""
+    """solver 実行中にキャンセルフラグを監視し、立ったら solver.stop_search() を呼ぶ。"""
     while not stop_event.is_set():
-        if await _is_cancel_requested(redis, schedule_id):
+        if is_cancel_requested(schedule_id):
             cancelled["flag"] = True
             try:
                 solver.stop_search()
@@ -101,19 +90,18 @@ async def _heartbeat_updater(
             continue
 
 
-async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0, workers: int = 4) -> dict:
+async def generate_shift(schedule_id: int, time_limit: float = 120.0, workers: int = 4) -> dict:
     """
-    ARQ タスク: schedule_id の稼働表を CP-SAT で生成して DB に保存する。
+    schedule_id の稼働表を CP-SAT で生成して DB に保存する。
+    `schedule_service._spawn_generation_task` から `asyncio.create_task` で起動される。
 
     Args:
-        ctx: ARQ コンテキスト（'redis' キーを含む）
         schedule_id: 対象 ShiftSchedule の id
         time_limit: CP-SAT タイムアウト（秒）
         workers: 並列ワーカー数
     """
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    redis = ctx.get("redis")
 
     try:
         async with Session() as db:
@@ -127,8 +115,8 @@ async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0,
                 logger.info("generate_shift: schedule %d already %s, skipping", schedule_id, schedule.status)
                 return {"status": schedule.status}
 
-            # キュー投入後・solver 開始前に cancel が来ていれば即時 CANCELLED
-            if redis is not None and await _is_cancel_requested(redis, schedule_id):
+            # タスク起動後・solver 開始前に cancel が来ていれば即時 CANCELLED
+            if is_cancel_requested(schedule_id):
                 schedule.status = "CANCELLED"
                 schedule.finished_at = datetime.now(timezone.utc)
                 await db.commit()
@@ -200,11 +188,9 @@ async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0,
             cancelled: dict = {"flag": False}
             stop_event = asyncio.Event()
 
-            watcher: asyncio.Task | None = None
-            if redis is not None:
-                watcher = asyncio.create_task(
-                    _watch_and_stop(redis, schedule_id, solver, cancelled, stop_event)
-                )
+            watcher = asyncio.create_task(
+                _watch_and_stop(schedule_id, solver, cancelled, stop_event)
+            )
             # issue #196: heartbeat updater (常に起動)
             heartbeat = asyncio.create_task(
                 _heartbeat_updater(Session, schedule_id, stop_event)
@@ -221,11 +207,10 @@ async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0,
                 )
             finally:
                 stop_event.set()
-                if watcher is not None:
-                    try:
-                        await watcher
-                    except Exception:
-                        logger.exception("cancel watcher errored for schedule %d", schedule_id)
+                try:
+                    await watcher
+                except Exception:
+                    logger.exception("cancel watcher errored for schedule %d", schedule_id)
                 try:
                     await heartbeat
                 except Exception:
@@ -233,13 +218,9 @@ async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0,
 
             # レースコンディション対策: watcher が stop_event 経由で退場する際に
             # 直前に設定された cancel フラグを見逃す場合がある。solve 完了後に
-            # Redis を直接確認して補完する。
-            if not cancelled["flag"] and redis is not None:
-                try:
-                    if await _is_cancel_requested(redis, schedule_id):
-                        cancelled["flag"] = True
-                except Exception:
-                    pass
+            # フラグを直接確認して補完する。
+            if not cancelled["flag"] and is_cancel_requested(schedule_id):
+                cancelled["flag"] = True
 
             # cancel が来ていた場合は CANCELLED 確定
             if cancelled["flag"]:
@@ -278,14 +259,12 @@ async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0,
                 partial_solver = cp_model.CpSolver()
                 partial_cancelled: dict = {"flag": False}
                 partial_stop_event = asyncio.Event()
-                partial_watcher: asyncio.Task | None = None
-                if redis is not None:
-                    partial_watcher = asyncio.create_task(
-                        _watch_and_stop(
-                            redis, schedule_id, partial_solver,
-                            partial_cancelled, partial_stop_event,
-                        )
+                partial_watcher = asyncio.create_task(
+                    _watch_and_stop(
+                        schedule_id, partial_solver,
+                        partial_cancelled, partial_stop_event,
                     )
+                )
 
                 try:
                     partial_status, partial_assignments, shortages, manager_gap_days = await asyncio.to_thread(
@@ -297,13 +276,12 @@ async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0,
                     )
                 finally:
                     partial_stop_event.set()
-                    if partial_watcher is not None:
-                        try:
-                            await partial_watcher
-                        except Exception:
-                            logger.exception(
-                                "partial cancel watcher errored for schedule %d", schedule_id
-                            )
+                    try:
+                        await partial_watcher
+                    except Exception:
+                        logger.exception(
+                            "partial cancel watcher errored for schedule %d", schedule_id
+                        )
 
                 logger.warning(
                     "generate_shift: schedule %d partial result: status=%s shortages=%d manager_gaps=%d",
@@ -311,12 +289,8 @@ async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0,
                 )
 
                 # partial solve 完了後のレースコンディション補完
-                if not partial_cancelled["flag"] and redis is not None:
-                    try:
-                        if await _is_cancel_requested(redis, schedule_id):
-                            partial_cancelled["flag"] = True
-                    except Exception:
-                        pass
+                if not partial_cancelled["flag"] and is_cancel_requested(schedule_id):
+                    partial_cancelled["flag"] = True
 
                 if partial_cancelled["flag"]:
                     schedule.status = "CANCELLED"
@@ -445,4 +419,5 @@ async def generate_shift(ctx: dict, schedule_id: int, time_limit: float = 120.0,
                 return {"status": "INFEASIBLE", "diagnosis": suspects}
 
     finally:
+        clear_cancel_flag(schedule_id)
         await engine.dispose()

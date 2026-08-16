@@ -22,16 +22,6 @@ services:
       DEBUG: "true"
       TEST_DATABASE_URL: "postgresql+asyncpg://demomart:demomart@db:5432/demomart_test"
 
-  worker:
-    build:
-      context: .
-      target: dev
-    volumes:
-      - ./app:/app/app
-    command: arq app.tasks.worker.WorkerSettings
-    environment:
-      DEBUG: "true"
-
   db:
     ports:
       - "127.0.0.1:5432:5432"

@@ -59,7 +59,7 @@ Google OR-Tools CP-SAT を用いた制約最適化 + React Web UI による手�
 |-------|-----------------------------------|----------|
 | 0     | CLI PoC（CP-SAT + CSV入出力）    | ✅ 完了  |
 | 1     | 基盤（FastAPI + DB + Docker）    | ✅ 完了  |
-| 2     | 最適化 API（ARQ + INFEASIBLE診断）| ✅ 完了  |
+| 2     | 最適化 API（バックグラウンドタスク + INFEASIBLE診断）| ✅ 完了  |
 | 3     | Web UI（生成・グリッド表示）      | ✅ 完了  |
 | 4     | 手動調整 UI（編集・バッファ・確定）| ✅ 完了 |
 | 4.1   | バッチ PATCH + マスタ管理画面     | ✅ 完了  |
@@ -75,14 +75,14 @@ Google OR-Tools CP-SAT を用いた制約最適化 + React Web UI による手�
 
 **Backend**
 - Python 3.13 + FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL
-- OR-Tools CP-SAT + ARQ (Redis) + Alembic + openpyxl
+- OR-Tools CP-SAT（asyncio.to_thread でプロセス内バックグラウンド実行）+ Alembic + openpyxl
 
 **Frontend**
 - React 18 + Vite + TypeScript + Tailwind CSS + Zustand + Axios
 - **Client-only SPA**（SSR 不採用）。`window` / `document` / `localStorage` は常にブラウザ上で利用可能な前提でコードを書く。SSR ガード（`typeof window === 'undefined'` 等）は追加しない。将来 Next.js などへ移行する場合は、その時点で再導入する。
 
 **Infrastructure**
-- Docker Compose（frontend / app / worker / db / redis）
+- Docker Compose（frontend / app / db）
 - nginx リバースプロキシ
 
 ## 5. 主要ディレクトリ
@@ -94,9 +94,8 @@ Google OR-Tools CP-SAT を用いた制約最適化 + React Web UI による手�
 │   ├── optimizer/     # loader, adapter, cp_sat_model（CP-SAT本体）
 │   ├── scripts/       # seed.py + seed_data/（初回シードCSV）
 │   ├── services/
-│   ├── tasks/         # ARQワーカー
+│   ├── tasks/         # バックグラウンド生成タスク（asyncio）
 │   └── models/
-└── tasks/             # todo.md, lessons.md
 
 ## 6. 開発ガイドライン
 

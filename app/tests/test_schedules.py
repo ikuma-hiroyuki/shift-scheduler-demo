@@ -1,7 +1,7 @@
 """
 schedules エンドポイントのテスト。
 
-稼働表生成は ARQ キューへの投入のみ検証する（実際のソルバー実行はワーカープロセスが行う）。
+稼働表生成はバックグラウンドタスクの起動のみ検証する（実際のソルバー実行は generate_shift 側でテスト済み）。
 export エンドポイントは GENERATED 状態のスケジュールを手動で作成して検証する。
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ from app.models.department import Department, WorkRuleConfig
 from app.models.employee import Employee
 from app.models.schedule import ShiftAssignment, ShiftSchedule
 from app.models.work_pattern import WorkPattern, WorkPatternGroup
+from app.services import schedule_service
 
 
 @pytest_asyncio.fixture
@@ -141,7 +142,7 @@ async def test_generate_requires_auth(client: tuple, dept_with_data: Department)
 
 @pytest.mark.asyncio
 async def test_cancel_schedule_draft_transitions_to_cancelled(
-    client: tuple, auth_headers: dict, dept_with_data: Department, monkeypatch
+    client: tuple, auth_headers: dict, dept_with_data: Department
 ):
     """DRAFT 状態の cancel は即時 CANCELLED に遷移する。"""
     http, session = client
@@ -154,37 +155,21 @@ async def test_cancel_schedule_draft_transitions_to_cancelled(
     session.add(sch)
     await session.flush()
 
-    # Redis 接続をスタブ化
-    sets: list[tuple[str, bytes]] = []
-
-    class _StubRedis:
-        async def set(self, key, value, ex=None):
-            sets.append((key, value))
-
-        async def aclose(self):
-            return None
-
-    async def _fake_pool(_settings):
-        return _StubRedis()
-
-    import arq
-    monkeypatch.setattr(arq, "create_pool", _fake_pool)
-
     resp = await http.post(
         f"/api/v1/schedules/{sch.id}/cancel", headers=auth_headers
     )
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "CANCELLED"
-    # Redis フラグも立っている
-    assert any(k == f"schedule:cancel:{sch.id}" for k, _ in sets)
+    # キャンセルフラグも立っている
+    assert schedule_service.is_cancel_requested(sch.id)
 
 
 @pytest.mark.asyncio
 async def test_cancel_schedule_generating_sets_flag_only(
-    client: tuple, auth_headers: dict, dept_with_data: Department, monkeypatch
+    client: tuple, auth_headers: dict, dept_with_data: Department
 ):
-    """GENERATING の cancel はフラグだけ立て、状態は worker が CANCELLED に確定するまで GENERATING のまま。"""
+    """GENERATING の cancel はフラグだけ立て、状態は generate_shift が CANCELLED に確定するまで GENERATING のまま。"""
     http, session = client
 
     sch = ShiftSchedule(
@@ -195,29 +180,14 @@ async def test_cancel_schedule_generating_sets_flag_only(
     session.add(sch)
     await session.flush()
 
-    sets: list[tuple[str, bytes]] = []
-
-    class _StubRedis:
-        async def set(self, key, value, ex=None):
-            sets.append((key, value))
-
-        async def aclose(self):
-            return None
-
-    async def _fake_pool(_settings):
-        return _StubRedis()
-
-    import arq
-    monkeypatch.setattr(arq, "create_pool", _fake_pool)
-
     resp = await http.post(
         f"/api/v1/schedules/{sch.id}/cancel", headers=auth_headers
     )
     assert resp.status_code == 202
     body = resp.json()
-    # worker が確定するまでは GENERATING のまま返す（フラグだけ立った状態）
+    # generate_shift が確定するまでは GENERATING のまま返す（フラグだけ立った状態）
     assert body["status"] == "GENERATING"
-    assert any(k == f"schedule:cancel:{sch.id}" for k, _ in sets)
+    assert schedule_service.is_cancel_requested(sch.id)
 
 
 @pytest.mark.asyncio

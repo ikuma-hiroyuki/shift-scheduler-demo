@@ -1,38 +1,41 @@
 """
-app/services/schedule_service.py — 稼働表生成キュー投入・スケジュール管理
+app/services/schedule_service.py — 稼働表生成タスク起動・スケジュール管理
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.models.schedule import ShiftSchedule
 
-# Redis に置く cancel フラグ。worker がポーリングして solver.stop_search() を呼ぶ。
-CANCEL_KEY_PREFIX = "schedule:cancel:"
-CANCEL_KEY_TTL_SEC = 1800  # 30 分。job_timeout (15 分) より長くしておけば確実に消える
+# キャンセルフラグ。ARQ ワーカーを廃止し FastAPI プロセス内で直接生成タスクを走らせる
+# ため、Redis ではなくプロセス内 set で管理する（単一プロセス前提）。
+_cancelled_schedule_ids: set[int] = set()
 
 
-def cancel_key(schedule_id: int) -> str:
-    return f"{CANCEL_KEY_PREFIX}{schedule_id}"
+def mark_cancelled(schedule_id: int) -> None:
+    _cancelled_schedule_ids.add(schedule_id)
 
 
-def _redis_settings():
-    """schedule_service 内で Redis 接続が必要な場合の RedisSettings を返す。"""
-    from arq.connections import RedisSettings
+def is_cancel_requested(schedule_id: int) -> bool:
+    return schedule_id in _cancelled_schedule_ids
 
-    url = settings.redis_url
-    without_scheme = url.removeprefix("redis://")
-    host_port, _, db_num = without_scheme.partition("/")
-    host, _, port = host_port.partition(":")
-    return RedisSettings(
-        host=host or "localhost",
-        port=int(port) if port else 6379,
-        database=int(db_num) if db_num else 0,
-    )
+
+def clear_cancel_flag(schedule_id: int) -> None:
+    _cancelled_schedule_ids.discard(schedule_id)
+
+
+def _spawn_generation_task(schedule_id: int, time_limit: float, workers: int) -> None:
+    """generate_shift をバックグラウンドタスクとして起動する。
+    schedule_service ⇔ shift_tasks の循環importを避けるため関数内 import。
+    テストではこの関数自体を monkeypatch して実際の起動を止める。
+    """
+    from app.tasks.shift_tasks import generate_shift
+
+    asyncio.create_task(generate_shift(schedule_id, time_limit, workers))
 
 
 async def enqueue_generation(
@@ -44,11 +47,9 @@ async def enqueue_generation(
     workers: int = 4,
 ) -> ShiftSchedule:
     """
-    ShiftSchedule レコードを作成して ARQ キューにジョブを投入する。
+    ShiftSchedule レコードを作成し、生成タスクをバックグラウンドで起動する。
     同部門・同年月に GENERATING / GENERATED が存在する場合は新規 attempt を作成する。
     """
-    from arq import create_pool
-
     # generation_attempt の採番
     existing = await db.execute(
         select(ShiftSchedule).where(
@@ -73,14 +74,7 @@ async def enqueue_generation(
     await db.commit()
     await db.refresh(schedule)
 
-    redis = await create_pool(_redis_settings())
-    await redis.enqueue_job(
-        "generate_shift",
-        schedule.id,
-        time_limit,
-        workers,
-    )
-    await redis.aclose()
+    _spawn_generation_task(schedule.id, time_limit, workers)
 
     return schedule
 
@@ -92,32 +86,25 @@ async def request_cancel(
     """
     生成中スケジュールの停止を要求する。
 
-    - DRAFT (キュー投入済みでまだ worker が拾っていない) は即座に CANCELLED に遷移し、
-      Redis フラグも立てて worker が拾った直後に短絡停止できるようにする。
-    - GENERATING はフラグだけ立て、worker の watcher が solver.stop_search() を呼ぶ。
-      worker が後段で finished_at と CANCELLED 状態を確定する。
+    - DRAFT (タスクがまだ起動していない) は即座に CANCELLED に遷移し、
+      フラグも立てて起動直後のタスクが短絡停止できるようにする。
+    - GENERATING はフラグだけ立て、generate_shift 内の watcher が solver.stop_search() を呼ぶ。
+      generate_shift が後段で finished_at と CANCELLED 状態を確定する。
     - GENERATED / INFEASIBLE / CANCELLED は何もせず None を返す（呼び出し側で 409）。
 
     Returns:
         変更後の ShiftSchedule（cancel 受理）、または None（受理不可）
     """
-    from arq import create_pool
-
     schedule = await db.get(ShiftSchedule, schedule_id)
     if schedule is None:
         return None
     if schedule.status not in ("DRAFT", "GENERATING"):
         return None
 
-    # Redis にフラグを置く（worker 側のポーリングで検知）
-    redis = await create_pool(_redis_settings())
-    try:
-        await redis.set(cancel_key(schedule_id), b"1", ex=CANCEL_KEY_TTL_SEC)
-    finally:
-        await redis.aclose()
+    mark_cancelled(schedule_id)
 
-    # DRAFT の場合は worker がまだ動いていないので即時 CANCELLED に確定。
-    # GENERATING の場合は worker がフラグを拾って自身で確定する。
+    # DRAFT の場合はタスクがまだ動いていないので即時 CANCELLED に確定。
+    # GENERATING の場合は generate_shift がフラグを拾って自身で確定する。
     if schedule.status == "DRAFT":
         schedule.status = "CANCELLED"
         schedule.finished_at = datetime.now(timezone.utc)

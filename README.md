@@ -95,19 +95,17 @@ Excel VBA による手動管理から Python ベースの自動化へ段階的�
 
 「アプリを箱に入れて、どのパソコンでも同じように動かせる仕組み」です。
 
-このシステムは内部で3つのプログラムが同時に動いています。それらをまとめて起動・管理するのが Docker です。
+このシステムは内部で複数のプログラムが同時に動いています。それらをまとめて起動・管理するのが Docker です。
 
 ```
-docker compose up -d  ← この1コマンドで以下の5つが全部起動する
+docker compose up -d  ← この1コマンドで以下が全部起動する
 ```
 
 | 起動するもの                       | 役割                                                     |
 | ---------------------------------- | -------------------------------------------------------- |
 | **frontend**（Web 画面）           | ブラウザで操作する画面（React + nginx）、ポート 8080（開発時は Vite dev server がポート 5273 で HMR 配信） |
-| **app**（アプリ本体）              | シフト計算ロジック・API サーバー（FastAPI）、ポート 8000 |
-| **worker**（バックグラウンド処理） | シフト生成をバックグラウンドで実行する専用プロセス       |
+| **app**（アプリ本体）              | シフト計算ロジック・API サーバー（FastAPI）。シフト生成もバックグラウンドタスクとして同一プロセス内で実行、ポート 8000 |
 | **db**（データベース）             | 従業員データ・ルール設定などの保存先（PostgreSQL）       |
-| **redis**（一時記憶）              | app → worker へのジョブ受け渡しに使用                    |
 
 ### FastAPI（ファストAPI）とは
 
@@ -361,7 +359,7 @@ docker compose exec app python -m app.scripts.seed
 | ----------- | -------------------------------------------------------------------------------- | --------- |
 | **Phase 0** | CLI PoC（CSV 入出力・DB なし）                                                   | ✅ 完了   |
 | **Phase 1** | FastAPI + PostgreSQL + Docker Compose 基盤・マスタ CRUD                          | ✅ 完了   |
-| **Phase 2** | シフト生成 API（ARQ 非同期）・Excel エクスポート・CSV インポート・代休提案       | ✅ 完了   |
+| **Phase 2** | シフト生成 API（バックグラウンドタスク非同期）・Excel エクスポート・CSV インポート・代休提案       | ✅ 完了   |
 | **Phase 3** | React Web UI（CSV 読込・生成進捗・一覧・詳細グリッド・削除・Excel エクスポート・部門動的選択） | ✅ 完了   |
 | **Phase 4** | 月次グリッド手動調整 UI（セル編集ポップオーバー + バッファリング + バッチ確定 + 代休提案） | ✅ 完了   |
 | **Phase 4.1** | バッチ PATCH + 従業員 / 作業パターン / 優先作業パターン / 希望休マスタ管理画面 | ✅ 完了   |
@@ -639,7 +637,7 @@ CSV ファイル群
 | DB               | SQLAlchemy 2.0 async + PostgreSQL 16 |
 | マイグレーション | Alembic                              |
 | 認証             | JWT（python-jose） + bcrypt          |
-| インフラ         | Docker Compose（app + db + redis）   |
+| インフラ         | Docker Compose（app + db）            |
 
 ### ディレクトリ構成
 
@@ -722,15 +720,15 @@ docker compose up --build
 | --- | --- | --- |
 | `frontend/src/**` | **不要**（自動反映） | Vite HMR がファイルを監視。ブラウザで `[vite] hot updated` ログを確認 |
 | `app/api/`, `app/services/`, `app/optimizer/` 等の Python コード | **不要**（自動反映） | `app` コンテナは `uvicorn --reload` で起動。保存で再読込 |
-| `app/tasks/**`（ARQ ワーカーのタスク） | `docker compose restart worker` | worker は `arq` 直起動で `--reload` 無し。再起動必須 |
-| `app/models/**`（SQLAlchemy モデル） | 1) Alembic でマイグレーション作成 → 2) `docker compose exec app alembic upgrade head` → 3) `docker compose restart worker` | DB スキーマと worker 内 ORM 反映の両方が必要 |
+| `app/tasks/**`（バックグラウンド生成タスク） | **不要**（自動反映） | `app` コンテナ内で `uvicorn --reload` により実行、専用プロセスは無い |
+| `app/models/**`（SQLAlchemy モデル） | 1) Alembic でマイグレーション作成 → 2) `docker compose exec app alembic upgrade head` | DB スキーマ反映が必要 |
 | 既存マイグレーション追加（`app/migrations/versions/*.py`） | `docker compose exec app alembic upgrade head` | DB に DDL 適用 |
-| `requirements`/`pyproject.toml` 等の依存追加 | `docker compose up -d --build app worker` | パッケージ取り込みのため再ビルド |
+| `requirements`/`pyproject.toml` 等の依存追加 | `docker compose up -d --build app` | パッケージ取り込みのため再ビルド |
 | `frontend/package.json` の依存追加 | `docker compose up -d --build frontend` | `node_modules` 再構築 |
 | `Dockerfile*` / `docker-compose*.yml` | `docker compose up -d --build` | イメージ・サービス定義変更のため再ビルド |
 | 環境変数（`.env`） | `docker compose up -d`（再作成） or `docker compose restart` | プロセスへの env 注入は再起動時 |
 
-> 反映できているか不安なときは `docker compose logs -f app worker` でログを見ながら再保存すると確認しやすい。
+> 反映できているか不安なときは `docker compose logs -f app` でログを見ながら再保存すると確認しやすい。
 > 完全リセットしたい場合は `docker compose down` → `docker compose up -d --build`。
 
 ### 開発モード（HMR）と 本番ビルドモードの切り替え
@@ -843,7 +841,7 @@ curl http://localhost:8000/health
 
 | 機能                    | 内容                                                                                     |
 | ----------------------- | ---------------------------------------------------------------------------------------- |
-| シフト生成 API          | `POST /api/v1/schedules/generate` → ARQ キューに投入、バックグラウンドで CP-SAT 実行     |
+| シフト生成 API          | `POST /api/v1/schedules/generate` → バックグラウンドタスクとして起動、CP-SAT 実行     |
 | INFEASIBLE 診断         | 解なし時に原因制約グループを自動特定して `diagnosis` フィールドに保存                    |
 | Excel エクスポート      | `GET /api/v1/schedules/{id}/export` → 色付き書式・ウィンドウ枠固定の xlsx をダウンロード |
 | 勤務希望 CSV インポート | `POST /api/v1/imports/roster` → MonShift 形式 CSV → LeaveRequest 一括登録                |
@@ -853,7 +851,7 @@ curl http://localhost:8000/health
 
 | 層             | 技術                                                                            |
 | -------------- | ------------------------------------------------------------------------------- |
-| 非同期タスク   | **ARQ**（Redis ベース・冪等性保証）                                             |
+| 非同期タスク   | FastAPI プロセス内 `asyncio` タスク（`asyncio.to_thread` で CP-SAT を非ブロッキング実行・冪等性保証）|
 | 最適化エンジン | **OR-Tools CP-SAT**（`app/optimizer/cp_sat_model.py` を DB アダプター経由で呼び出し） |
 | Excel 出力     | **openpyxl**（色付き書式・ウィンドウ枠固定）                                    |
 | 祝日判定       | **jpholiday**                                                                   |
@@ -866,8 +864,7 @@ app/
 │   ├── loader.py        # DB → ShiftModelInput 変換（全マスタを async で取得）
 │   └── adapter.py       # solver 呼び出し → ShiftAssignment[] 変換
 ├── tasks/
-│   ├── shift_tasks.py   # ARQ generate_shift タスク（冪等・INFEASIBLE 診断組み込み）
-│   └── worker.py        # ARQ WorkerSettings
+│   └── shift_tasks.py   # generate_shift タスク（冪等・INFEASIBLE 診断組み込み、FastAPI プロセス内で実行）
 ├── services/
 │   ├── schedule_service.py      # 生成キュー投入・一覧取得
 │   ├── export_service.py        # xlsx 生成
@@ -883,8 +880,8 @@ app/
 ```
 POST /api/v1/schedules/generate
   ↓ ShiftSchedule レコード作成（status=DRAFT）
-  ↓ ARQ キューにジョブ投入
-  ↓ [バックグラウンド] worker プロセスが受信
+  ↓ asyncio.create_task で generate_shift をバックグラウンド起動
+  ↓ [バックグラウンド]
       → loader.py: DB から ShiftModelInput を組み立て
       → adapter.py: CP-SAT ソルバー実行
       → FEASIBLE/OPTIMAL → ShiftAssignment を DB に保存 → status=GENERATED

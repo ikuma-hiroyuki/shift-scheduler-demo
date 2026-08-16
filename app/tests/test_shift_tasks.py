@@ -1,7 +1,7 @@
 """
 generate_shift タスクのタイムスタンプ記録テスト。
 
-実際の CP-SAT 実行と ARQ Redis 接続は monkeypatch で差し替え、
+実際の CP-SAT 実行と DB エンジン生成は monkeypatch で差し替え、
 DB セッション (テスト用 savepoint) を共有して started_at / finished_at が
 3 完了経路 (成功 / INFEASIBLE / 入力エラー) すべてで記録されることを確認する。
 """
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.department import Department
 from app.models.schedule import ShiftSchedule
+from app.services import schedule_service
 from app.tasks import shift_tasks
 
 
@@ -90,7 +91,7 @@ async def test_generate_shift_records_timestamps_on_success(monkeypatch, patched
     )
 
     before = datetime.now(timezone.utc)
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
     after = datetime.now(timezone.utc)
 
     assert result["status"] == "GENERATED"
@@ -112,7 +113,7 @@ async def test_generate_shift_records_timestamps_on_infeasible(monkeypatch, patc
     monkeypatch.setattr(shift_tasks, "run_diagnosis", lambda inp: ["H3違反"])
     monkeypatch.setattr(shift_tasks, "run_capacity_summary", lambda inp: [])
 
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "INFEASIBLE"
     await session.refresh(sch)
@@ -143,7 +144,7 @@ async def test_generate_shift_concatenates_shortage_summary_and_suspects(
     )
     monkeypatch.setattr(shift_tasks, "run_diagnosis", lambda inp: ["有給・希望休"])
 
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "INFEASIBLE"
     await session.refresh(sch)
@@ -171,7 +172,7 @@ async def test_generate_shift_diagnosis_when_no_shortage_and_no_suspects(
     monkeypatch.setattr(shift_tasks, "run_capacity_summary", lambda inp: [])
     monkeypatch.setattr(shift_tasks, "run_diagnosis", lambda inp: [])
 
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "INFEASIBLE"
     await session.refresh(sch)
@@ -195,20 +196,20 @@ async def test_generate_shift_bumps_attempt_on_infeasible_retry(
     )
     monkeypatch.setattr(shift_tasks, "run_diagnosis", lambda inp: ["H3違反"])
     monkeypatch.setattr(shift_tasks, "run_capacity_summary", lambda inp: [])
-    result1 = await shift_tasks.generate_shift({}, sch.id)
+    result1 = await shift_tasks.generate_shift(sch.id)
     assert result1["status"] == "INFEASIBLE"
     await session.refresh(sch)
     assert sch.status == "INFEASIBLE"
     assert sch.generation_attempt == 1
 
     # 2 回目: ユーザが制約を緩めて再投入 → attempt が 2 に bump される
-    result2 = await shift_tasks.generate_shift({}, sch.id)
+    result2 = await shift_tasks.generate_shift(sch.id)
     assert result2["status"] == "INFEASIBLE"
     await session.refresh(sch)
     assert sch.generation_attempt == 2
 
     # 3 回目: さらにもう一度 → 3 に bump
-    result3 = await shift_tasks.generate_shift({}, sch.id)
+    result3 = await shift_tasks.generate_shift(sch.id)
     assert result3["status"] == "INFEASIBLE"
     await session.refresh(sch)
     assert sch.generation_attempt == 3
@@ -229,7 +230,7 @@ async def test_generate_shift_does_not_bump_attempt_on_first_run(
         lambda inp, sid, time_limit, workers, solver=None: ("OPTIMAL", []),
     )
 
-    await shift_tasks.generate_shift({}, sch.id)
+    await shift_tasks.generate_shift(sch.id)
     await session.refresh(sch)
     assert sch.generation_attempt == 1
 
@@ -238,7 +239,7 @@ async def test_generate_shift_does_not_bump_attempt_on_first_run(
 async def test_generate_shift_skips_when_cancel_requested_before_solver(
     monkeypatch, patched_task
 ):
-    """キュー投入後・solver 起動前に cancel フラグが立っていれば即時 CANCELLED に確定し、
+    """タスク起動後・solver 起動前に cancel フラグが立っていれば即時 CANCELLED に確定し、
     run_optimizer は呼ばれない。"""
     session = patched_task
     sch = await _make_schedule(session)
@@ -251,11 +252,9 @@ async def test_generate_shift_skips_when_cancel_requested_before_solver(
 
     monkeypatch.setattr(shift_tasks, "run_optimizer", _should_not_run)
 
-    class _Redis:
-        async def get(self, key):
-            return b"1" if key == f"schedule:cancel:{sch.id}" else None
+    schedule_service.mark_cancelled(sch.id)
 
-    result = await shift_tasks.generate_shift({"redis": _Redis()}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "CANCELLED"
     assert called["run"] is False
@@ -283,7 +282,7 @@ async def test_generate_shift_cancel_during_solver(monkeypatch, patched_task):
 
     def _slow_run(inp, sid, time_limit, workers, solver=None):
         # watcher が cancel を検知するまで擬似的に時間をかける（同期）
-        # to_thread で別スレッド実行されるため、メインループはこの間に Redis を 1 回ポーリング可能。
+        # to_thread で別スレッド実行されるため、メインループはこの間にキャンセルフラグをポーリング可能。
         import time as _t
         for _ in range(20):
             if stopped["called"]:
@@ -293,20 +292,14 @@ async def test_generate_shift_cancel_during_solver(monkeypatch, patched_task):
 
     monkeypatch.setattr(shift_tasks, "run_optimizer", _slow_run)
 
-    flag = {"value": False}
-
-    async def _trigger_after_delay():
+    async def _mark_cancelled_after_delay():
         import asyncio as _a
         await _a.sleep(0.2)
-        flag["value"] = True
-
-    class _Redis:
-        async def get(self, key):
-            return b"1" if flag["value"] else None
+        schedule_service.mark_cancelled(sch.id)
 
     import asyncio
-    trigger = asyncio.create_task(_trigger_after_delay())
-    result = await shift_tasks.generate_shift({"redis": _Redis()}, sch.id)
+    trigger = asyncio.create_task(_mark_cancelled_after_delay())
+    result = await shift_tasks.generate_shift(sch.id)
     await trigger
 
     assert result["status"] == "CANCELLED"
@@ -338,8 +331,6 @@ async def test_generate_shift_cancel_during_partial_solve(monkeypatch, patched_t
         lambda inp, sid, time_limit, workers, solver=None: ("UNKNOWN", []),
     )
 
-    flag = {"value": False}
-
     def _slow_partial(inp, sid, time_limit, solver=None):
         import time as _t
         for _ in range(20):
@@ -350,18 +341,14 @@ async def test_generate_shift_cancel_during_partial_solve(monkeypatch, patched_t
 
     monkeypatch.setattr(shift_tasks, "run_partial_solve", _slow_partial)
 
-    async def _trigger_after_delay():
+    async def _mark_cancelled_after_delay():
         import asyncio as _a
         await _a.sleep(0.2)
-        flag["value"] = True
-
-    class _Redis:
-        async def get(self, key):
-            return b"1" if flag["value"] else None
+        schedule_service.mark_cancelled(sch.id)
 
     import asyncio
-    trigger = asyncio.create_task(_trigger_after_delay())
-    result = await shift_tasks.generate_shift({"redis": _Redis()}, sch.id)
+    trigger = asyncio.create_task(_mark_cancelled_after_delay())
+    result = await shift_tasks.generate_shift(sch.id)
     await trigger
 
     assert result["status"] == "CANCELLED"
@@ -381,7 +368,7 @@ async def test_generate_shift_records_timestamps_on_input_error(monkeypatch, pat
 
     monkeypatch.setattr(shift_tasks, "build_shift_model_input", _raise)
 
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "ERROR"
     await session.refresh(sch)
@@ -414,7 +401,7 @@ async def test_generate_shift_records_status_when_build_aborts_transaction(
 
     monkeypatch.setattr(shift_tasks, "build_shift_model_input", _raise_db_error)
 
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "ERROR"
     await session.refresh(sch)
@@ -479,7 +466,7 @@ async def test_generate_shift_partial_path_saves_shortages(
         lambda inp: ["5日(月): 必要枠2名 > 利用可能0名 (希望休4名)"],
     )
 
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "PARTIAL"
     assert result["shortage_count"] == 2
@@ -527,7 +514,7 @@ async def test_generate_shift_falls_back_to_infeasible_when_partial_also_infeasi
         lambda inp: ["5日(月): 管理職全員休み"],
     )
 
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "INFEASIBLE"
     await session.refresh(sch)
@@ -564,7 +551,7 @@ async def test_generate_shift_returns_infeasible_when_priority_master_incomplete
         raise AssertionError("solver should not be called when preflight fails")
     monkeypatch.setattr(shift_tasks, "run_optimizer", _should_not_be_called)
 
-    result = await shift_tasks.generate_shift({}, sch.id)
+    result = await shift_tasks.generate_shift(sch.id)
 
     assert result["status"] == "ERROR"
     assert result["error"] == "priority_master_incomplete"
