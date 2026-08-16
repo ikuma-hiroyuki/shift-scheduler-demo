@@ -147,4 +147,55 @@ describe('TourOverlay', () => {
 
     expect(useOnboardingStore.getState().active).toBe(false)
   })
+
+  // Regression: 本文が長いステップ（例: シフト自動生成の案内）で、固定の
+  // "window.innerHeight - 220" 想定が実際のツールチップ高さ（256px超）より
+  // 小さく、ボタン行が画面下端からはみ出て見えなくなっていた。
+  // Found by user report + /qa reproduction on 2026-08-16 at 1280x800（本番）。
+  it('keeps the tooltip fully within the viewport when the target sits near the bottom and the body is tall', async () => {
+    const originalInnerHeight = window.innerHeight
+    const originalInnerWidth = window.innerWidth
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 })
+
+    const originalGetBCR = HTMLElement.prototype.getBoundingClientRect
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.dataset.testid === 'target-a') {
+        return {
+          top: 580, left: 700, right: 1000, bottom: 620, width: 300, height: 40,
+          x: 700, y: 580, toJSON() {},
+        } as DOMRect
+      }
+      if (this.getAttribute('role') === 'dialog') {
+        // 実測で確認した「シフトを自動生成する」ステップの実際の高さ（256.75px）相当
+        return {
+          top: 0, left: 0, right: 320, bottom: 260, width: 320, height: 260,
+          x: 0, y: 0, toJSON() {},
+        } as DOMRect
+      }
+      return originalGetBCR.call(this)
+    }
+
+    try {
+      render(
+        <>
+          <div data-testid="target-a">target</div>
+          <TourOverlay />
+        </>,
+      )
+      useOnboardingStore.getState().start()
+      useOnboardingStore.setState({ stepIndex: 1 })
+      await waitFor(() => expect(screen.getByText('対象Aのステップ')).toBeInTheDocument())
+
+      const dialog = screen.getByRole('dialog')
+      await waitFor(() => {
+        const top = parseFloat(dialog.style.top)
+        expect(top + 260).toBeLessThanOrEqual(800)
+      })
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalGetBCR
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalInnerHeight })
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth })
+    }
+  })
 })

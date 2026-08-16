@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useOnboardingStore } from '../../stores/onboarding'
 import { TOUR_STEPS } from './tourSteps'
 
@@ -31,6 +31,11 @@ export default function TourOverlay() {
   const [rect, setRect] = useState<Rect | null>(null)
   // 対象探索中はツールチップを出さない（見つからずスキップする一瞬のちらつき防止）
   const [resolved, setResolved] = useState(false)
+
+  const tooltipRef = useRef<HTMLDivElement>(null)
+  // ステップごとに本文の長さが違うため、実測サイズで画面内に収まるよう位置を調整する
+  // （固定の高さ想定だと本文が長いステップでボタン行が画面外にはみ出す）。
+  const [tooltipSize, setTooltipSize] = useState({ width: 320, height: 280 })
 
   const step = active ? TOUR_STEPS[stepIndex] : undefined
 
@@ -110,6 +115,19 @@ export default function TourOverlay() {
     return () => document.removeEventListener('keydown', onKey)
   }, [active, close])
 
+  // 本文の長さはステップごとに違うので、実際にレンダーされたサイズを測って
+  // はみ出さない位置を計算する（固定の高さ想定だと長い本文でボタン行が画面外に出る）。
+  useLayoutEffect(() => {
+    const el = tooltipRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setTooltipSize((prev) =>
+      prev.width === r.width && prev.height === r.height
+        ? prev
+        : { width: r.width, height: r.height },
+    )
+  })
+
   if (!active || !step || !resolved) return null
 
   const isFirst = stepIndex === 0
@@ -118,11 +136,17 @@ export default function TourOverlay() {
   const tooltipStyle: React.CSSProperties = rect
     ? {
         position: 'fixed',
-        top: Math.min(
-          rect.top + rect.height + PAD + 8,
-          window.innerHeight - 220,
+        top: Math.max(
+          16,
+          Math.min(
+            rect.top + rect.height + PAD + 8,
+            window.innerHeight - tooltipSize.height - 16,
+          ),
         ),
-        left: Math.min(Math.max(rect.left, 16), window.innerWidth - 336),
+        left: Math.min(
+          Math.max(rect.left, 16),
+          window.innerWidth - tooltipSize.width - 16,
+        ),
         width: 320,
       }
     : {
@@ -150,6 +174,7 @@ export default function TourOverlay() {
       {!rect && <div className="absolute inset-0 bg-black/35" />}
 
       <div
+        ref={tooltipRef}
         style={{ ...tooltipStyle, pointerEvents: 'auto' }}
         className="bg-cream-50 border border-ink/10 rounded-lg shadow-xl p-5"
         role="dialog"
