@@ -904,7 +904,8 @@ docker compose exec app python3 -m pytest app/tests/ -v
 | 層        | 採用予定技術                                                                |
 | --------- | --------------------------------------------------------------------------- |
 | AI 微調整 | Claude API（チャット形式のシフト調整）                                      |
-| インフラ  | DigitalOcean Droplet + Docker Compose（Managed PostgreSQL + Managed Redis） |
+
+インフラは下記「Production Deploy」の構成を採用済み（当初計画の DigitalOcean 案からは変更）。
 
 > Frontend は Phase 3〜4 で React 18 + Vite + TypeScript + Tailwind + Zustand を採用済み（月次グリッド・手動調整 UI・バッファリング確定・代休提案を実装）。当初計画の Vue 3 からの変更は確定。
 
@@ -912,119 +913,118 @@ docker compose exec app python3 -m pytest app/tests/ -v
 
 ## Production Deploy
 
+このポートフォリオデモは **全て無料枠** で動いている。
+
 ### 採用構成
 
 | 層 | ホスト | プラン |
 |---|---|---|
-| Frontend (React+Vite SPA) | **Cloudflare Pages** | Free |
-| Backend (FastAPI) | **Render Web Service** (Docker) | Starter ($7/月) |
-| Worker (ARQ) | **Render Background Worker** (Docker) | Starter ($7/月) |
-| Postgres | **Neon** (Tokyo) | Free |
-| Redis | **Upstash** (Tokyo) | Free |
+| Frontend (React+Vite SPA) | **Cloudflare Pages** | Free（スリープなし） |
+| Backend (FastAPI) | **Render Web Service** (Docker, 単一サービス) | Free（15分無操作でスリープ、復帰30〜60秒） |
+| Postgres | **Supabase** (ap-northeast-1) | Free |
 
-合計 **$14/月**。Vercel ではなく Cloudflare Pages を採用しているのは業務利用 (= 商用利用) で Vercel Hobby plan の ToS グレーゾーンを回避するため。Frontend → Backend は Cloudflare Pages の `_redirects` ファイル (`frontend/public/_redirects`) で `/api/*` と `/auth/*` を Render にプロキシ (同一 origin 化、CORS 不要)。
+Redis・ARQ ワーカーは使わない。稼働表生成は FastAPI プロセス内の `asyncio` バックグラウンドタスクとして実行する（詳細は上の「非同期タスク」参照）。Render 無料枠に Background Worker の枠が無いための構成でもあり、単一サービスで完結するぶんデプロイもシンプルになる。
+
+フロントエンドとバックエンドは別オリジンになる（Cloudflare Pages は外部オリジンへの200プロキシに非対応のため）。ビルド時に `VITE_API_URL` でバックエンドの絶対URLを埋め込み、バックエンド側は `CORS_ALLOWED_ORIGINS` でフロントのオリジンを許可する。
+
+### Supabase 接続の注意点
+
+Supabase の Postgres には「直結（5432）」「Session Pooler（5432）」「Transaction Pooler（6543）」の3種類の接続方法がある。Render の Web Service は永続プロセスなので **Session Pooler** を使う。
+
+Transaction Pooler（pgBouncer transaction mode）配下で asyncpg のデフォルト（prepared statement キャッシュ有効）を使うと `prepared statement "..." does not exist` エラーが出る。本リポジトリでは `app/core/database.py` の `PGBOUNCER_CONNECT_ARGS`（`statement_cache_size=0`）を全ての `create_async_engine` 呼び出しに適用済みなので、Transaction Pooler でも動く。
+
+```
+# 接続文字列の形（DATABASE_URL、asyncpg ドライバ用に +asyncpg を付ける）
+postgresql+asyncpg://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+```
 
 ### デプロイ手順
 
-#### Phase A — ストレージ (10〜20 分)
-
-1. **Neon** で Postgres インスタンス作成 (region: `ap-northeast-1`)。接続文字列を `postgresql+asyncpg://...` 形式で取得 (asyncpg ドライバ用に `+asyncpg` を追加すること)。
-2. **Upstash** で Redis 作成 (region: Tokyo)。`REDIS_URL` を取得。
-
-#### Phase B — Backend (Render, 30〜45 分)
-
-1. Render に新規 Web Service を作成。
-   - Build: `Dockerfile` (リポ root)
-   - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-   - Pre-Deploy Command: `alembic upgrade head && python -m app.scripts.bootstrap_admin`
-   - Plan: Starter
-   - 環境変数:
-     ```
-     DATABASE_URL=postgresql+asyncpg://<neon>
-     REDIS_URL=<upstash>
-     SECRET_KEY=<python -c "import secrets; print(secrets.token_urlsafe(48))" で生成>
-     ACCESS_TOKEN_EXPIRE_MINUTES=60
-     DEBUG=false
-     RECAPTCHA_SECRET=<Google reCAPTCHA admin で発行>
-     ADMIN_EMAIL=<本番管理者メール>
-     ADMIN_PASSWORD=<強パスワード>
-     ```
-2. Render Web Service の URL をメモ (例: `https://demo-mart-api.onrender.com`)。`frontend/public/_redirects` 内のホスト名がこれと一致することを確認 (異なる場合は修正してコミット)。
-3. Render に新規 Background Worker を作成。
-   - 同 Dockerfile
-   - Start command: `arq app.tasks.worker:WorkerSettings`
-   - Plan: Starter
-   - 環境変数: Web Service と同じ (RECAPTCHA_SECRET / ADMIN_* は worker では未使用だが同値で問題なし)
-
-#### Phase C — Frontend (Cloudflare Pages, 15 分)
-
-1. Cloudflare Dashboard → Workers & Pages → Create → Pages → Connect to Git。
-2. リポを選択し以下で設定:
-   - Framework preset: **Vite**
-   - Build command: `npm run build`
-   - Build output directory: `dist`
-   - Root directory: `frontend`
-3. Environment variables (Production):
-   - `VITE_RECAPTCHA_SITE_KEY=<Google reCAPTCHA admin で発行>`
-4. Save and Deploy。`<project>.pages.dev` URL を取得。
-
-> ⚠️ **Preview Deployments の注意**: CF Pages は PR ごとに `<hash>.<project>.pages.dev` を自動デプロイする。デフォルトでは Production の env vars と `_redirects` がそのまま preview にも継承されるため、preview から本番 Render API/DB に書き込まれる。対応策: (a) Project Settings → Environment Variables で対象 env (`VITE_RECAPTCHA_SITE_KEY` 等) を **Production** scope のみに限定する、または (b) Builds & Deployments → Preview deployments を無効化する。本番 DB を保護するために必須。
-
-> ℹ️ **Neon Free tier の cold start**: Neon Free は無アクセスで suspend される (約 5 分後)。再アクセス時に 1〜3 秒の wakeup 遅延が発生する。Render Starter (常時 up) と組み合わせても朝イチログインは数秒遅い可能性あり。常時応答が必要なら Neon paid tier を検討。
-
-#### Phase D — 動作確認 (15 分)
-
-1. `<project>.pages.dev/login` で本番 admin ログイン (`ADMIN_PASSWORD` で投入したパスワード)。
-2. `/shift` 月選択 → 生成ジョブ → SUCCESS (Render Worker のログで `arq` が job 受信したことを確認)。
-3. マスタ画面 (employees / day_templates / choice_groups / pattern_triggers) で CRUD 動作確認。
-4. reCAPTCHA widget が表示されること、不正トークンで弾かれることを確認。
-5. ブラウザ DevTools の Network タブで `/api/*` リクエストが `pages.dev` ドメインで完結 (CORS preflight が発生しない) ことを確認。
-
-### bootstrap_admin スクリプト
-
-本番 DB に管理者ユーザーを upsert する CLI。env から `ADMIN_EMAIL` / `ADMIN_PASSWORD` を読み、既存ユーザーがいればパスワードを更新、いなければ新規作成する。env 未設定時は exit code 1 で終了 (Render のデプロイ失敗扱い)。
+#### 1. Supabase プロジェクト作成
 
 ```bash
-python -m app.scripts.bootstrap_admin
+supabase login
+supabase projects create <name> --org-id <org-id> --region ap-northeast-1 --db-password <password>
 ```
 
-`seed.py` は dev 用の `admin@example.com` を作成するため、本番 DB には**投入しない**こと。本番管理者は必ず `bootstrap_admin` 経由で env から作成する。
+Session Pooler の接続文字列（上記の形）を控えておく。
 
-### 本 PR マージ後の必須手動作業
+#### 2. Render Web Service 作成
 
-PR マージだけでは本番デプロイは完了しない。次の 2 項目は **CF Pages を有効化する前に必ず手動で実施**すること。怠ると本番障害につながる。
+無料プランには Pre-Deploy Command が無いため、マイグレーション + 管理者upsertは `render-start.sh`（`dockerCommand` から起動、コンテナ起動のたびに実行・冪等）で行う。
 
-#### 1. `frontend/public/_redirects` のホスト名置換
-
-現状は placeholder `demo-mart-api.onrender.com` で commit されている。
-
-手順:
-1. Phase B で Render Web Service を作成する。
-2. Render dashboard で確定した URL (例: `demo-mart-api.onrender.com` / `demo-mart-api-v2.onrender.com` 等) を確認。
-3. placeholder と一致しない場合、`frontend/public/_redirects` の 3 行 (`/api/*` / `/auth/*` / `/health`) のホスト名を実 URL に書き換えて commit + push。
-4. その push をトリガーに CF Pages がビルドされる流れになる (= Render URL が出来てから CF Pages を初めてデプロイする順序を厳守)。
-
-検証方法 (CF Pages デプロイ後):
 ```bash
-curl -I https://<project>.pages.dev/health
-# → 200 OK + Render の {"status":"ok"} が透過で返ること (HTML が返ったら _redirects が効いていない)
+render login
+render services create \
+  --name <name> --type web_service \
+  --repo https://github.com/<owner>/<repo> --branch main \
+  --runtime docker --plan free --region singapore \
+  --health-check-path /health --output json --confirm
 ```
 
-#### 2. Cloudflare Pages の Preview Deployments の env scope を Production 限定に絞る
+`render services create` / `update` の CLI には `dockerCommand` を設定するフラグが無いため、Render API を直接叩く（`~/.render/cli.yaml` の `api.key` が使える）:
 
-CF Pages のデフォルトでは PR ごとの preview deploy (`<hash>.<project>.pages.dev`) も production の env と `_redirects` を継承するため、preview から本番 Render API/DB に書き込まれる事故が起きる。
+```bash
+curl -X PATCH "https://api.render.com/v1/services/<service-id>" \
+  -H "Authorization: Bearer <api-key>" -H "Content-Type: application/json" \
+  -d '{"serviceDetails":{"envSpecificDetails":{"dockerCommand":"/app/render-start.sh"}}}'
+```
 
-対応 (どちらか):
-- **A (推奨)**: Project Settings → Environment Variables → 各 env (`VITE_RECAPTCHA_SITE_KEY` 等) を **Production** scope のみに設定。Preview には別の staging 値を入れるか空のままにする。さらに staging Render を立てて preview の `_redirects` をそちらに向ける運用に拡張可。
-- **B**: Project Settings → Builds & Deployments → Preview deployments を **Disabled** にする。シンプルだが PR レビューで実物を確認できなくなる。
+環境変数（同じく `PUT /v1/services/<service-id>/env-vars`、または Dashboard の Environment タブ）:
 
-最低限 A の env scope 限定だけは実施する。Preview から本番 DB を破壊するリスクは大きい。
+```
+DATABASE_URL=<Supabase Session Pooler の接続文字列>
+SECRET_KEY=<python -c "import secrets; print(secrets.token_urlsafe(48))" で生成>
+RECAPTCHA_SECRET=            # 空 = デモではreCAPTCHA無効（コードは実装済み・本番運用時は設定を推奨）
+CORS_ALLOWED_ORIGINS=<Cloudflare Pages の URL>
+DEMO_MODE=true               # デモデータ初期化APIを有効化
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=<強パスワード>
+```
+
+Render 側の URL（`https://<name>.onrender.com`）が確定する。これを Phase 3 の `VITE_API_URL` に使う。
+
+#### 3. 初回データ投入
+
+`render-start.sh` は管理者ユーザーの upsert（`bootstrap_admin`）のみ行う。デモの部門・従業員・作業パターンは別途 `seed.py` を一度だけ実行する（`admin@example.com` は既に存在するため上書きせずスキップされる）。
+
+```bash
+render ssh <service-id>
+# コンテナ内で:
+python -m app.scripts.seed
+```
+
+以降のデータ初期化はアプリの管理画面（ユーザー管理ページ）にある「デモデータを初期化」ボタン（`POST /api/v1/demo/reset`、`DEMO_MODE=true` かつ管理者のみ）から行える。
+
+#### 4. Cloudflare Pages デプロイ
+
+```bash
+wrangler login
+wrangler pages project create <name> --production-branch main
+
+cd frontend
+VITE_API_URL=https://<render-service>.onrender.com npm run build
+wrangler pages deploy dist --project-name <name> --branch main
+```
+
+`VITE_API_URL` は Vite のビルド時に静的に埋め込まれる値なので、Render の URL が変わった場合は再ビルド＋再デプロイが必要（Cloudflare Pages ダッシュボードで Git 連携している場合はビルド環境変数として設定する）。
+
+### 動作確認
+
+1. `https://<project>.pages.dev/login` で `ADMIN_EMAIL` / `ADMIN_PASSWORD` を使ってログイン。
+2. `/shift` で月を選び「稼働表自動作成」→ バックグラウンドで生成が進み、完了すると一覧に GENERATED（または INFEASIBLE 診断つきで PARTIAL）が表示される。
+3. マスタ画面（従業員 / 作業パターン / 日テンプレート / 選択グループ）で CRUD が通ることを確認。
+4. ユーザー管理ページの「デモデータを初期化」でリセットできることを確認。
+
+### 休止対策
+
+- Render 無料 Web Service は15分無操作でスリープする（初回アクセスに30〜60秒）。
+- Supabase 無料プロジェクトは約7日間無操作で一時停止する。**訪問者側では復帰できず、プロジェクトオーナーが Supabase ダッシュボードから再開する必要がある**。長期間アクセスが無い場合は定期的にダッシュボードを確認するか、軽量な定期pingを設定すること。
 
 ### ロールバック
 
 - Cloudflare Pages: ダッシュボードの Deployments 一覧から前バージョンへ Rollback ボタン 1 クリック。
-- Render: Deploys タブから rollback。
-- Alembic migration を伴うデプロイは事前に Neon でスナップショットを取得しておくと安全。
+- Render: Deploys タブから rollback、または `render deploys create <service-id>` で特定コミットを再デプロイ。
 
 ### マイグレーション履歴について
 
