@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
 from app.core.config import settings
+from app.core.database import PGBOUNCER_CONNECT_ARGS
 from app.models.schedule import ShiftAssignment, ShiftSchedule, ShiftShortageSlot
 from app.optimizer.adapter import (
     run_capacity_summary,
@@ -100,7 +101,9 @@ async def generate_shift(schedule_id: int, time_limit: float = 120.0, workers: i
         time_limit: CP-SAT タイムアウト（秒）
         workers: 並列ワーカー数
     """
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    engine = create_async_engine(
+        settings.database_url, pool_pre_ping=True, connect_args=PGBOUNCER_CONNECT_ARGS
+    )
     Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
     try:

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.constants.group_colors import GROUP_COLOR_PRESETS
 from app.core.config import settings
+from app.core.database import PGBOUNCER_CONNECT_ARGS
 from app.core.security import get_password_hash
 from app.models.choice_group import (
     PatternChoiceGroup,
@@ -463,7 +464,7 @@ async def seed(session: AsyncSession) -> None:
 
 async def main() -> None:
     database_url = os.environ.get("DATABASE_URL", settings.database_url)
-    engine = create_async_engine(database_url, echo=False)
+    engine = create_async_engine(database_url, echo=False, connect_args=PGBOUNCER_CONNECT_ARGS)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
     async with async_session() as session:
         await seed(session)

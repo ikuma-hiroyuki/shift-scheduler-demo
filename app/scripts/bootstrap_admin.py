@@ -17,6 +17,7 @@ import sys
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.database import PGBOUNCER_CONNECT_ARGS
 from app.core.security import get_password_hash
 from app.models.user import User
 
@@ -64,7 +65,7 @@ async def _run(email: str, password: str) -> None:
             "(dev デフォルトへの fallback は禁止)。"
         )
         sys.exit(1)
-    engine = create_async_engine(database_url, echo=False)
+    engine = create_async_engine(database_url, echo=False, connect_args=PGBOUNCER_CONNECT_ARGS)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with session_maker() as session:

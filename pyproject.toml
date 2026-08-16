@@ -19,6 +19,7 @@ dependencies = [
     "openpyxl>=3.1",
     "ortools>=9.8",
     "jpholiday>=0.4",
+    "httpx",
 ]
 
 [project.optional-dependencies]
@@ -26,7 +27,6 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
-    "httpx",
 ]
 
 [tool.hatch.build.targets.wheel]

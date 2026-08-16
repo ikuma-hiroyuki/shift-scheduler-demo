@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 24 * 7
     debug: bool = False
     recaptcha_secret: str = ""
+    cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000,http://localhost"
+    # ポートフォリオデモ限定機能（デモデータ初期化 API）を有効化するフラグ。
+    # 本番相当のデプロイでは絶対に true にしない。
+    demo_mode: bool = False
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
 
     @model_validator(mode="after")
     def warn_insecure_defaults(self) -> "Settings":

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useAuthStore } from '../stores/auth'
 import { createUser, deleteUser, listUsers, updateUser } from '../api/users'
+import { resetDemoData } from '../api/demo'
 import type { User, UserCreate, UserUpdate } from '../types/api'
 import UserFormModal from '../components/user/UserFormModal'
 import DeleteConfirm from '../components/common/DeleteConfirm'
+import ConfirmDialog from '../components/common/ConfirmDialog'
 import PageHeader from '../components/common/PageHeader'
 
 export default function UsersPage() {
@@ -17,6 +19,10 @@ export default function UsersPage() {
 
   const [deleting, setDeleting] = useState<User | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
+
+  const [resetConfirming, setResetConfirming] = useState(false)
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetMsg, setResetMsg] = useState('')
 
   async function reload() {
     setLoading(true)
@@ -85,6 +91,24 @@ export default function UsersPage() {
       setErr(typeof msg === 'string' ? msg : '削除に失敗しました')
     } finally {
       setDeleteBusy(false)
+    }
+  }
+
+  async function handleResetDemoData() {
+    setResetBusy(true)
+    setResetMsg('')
+    try {
+      await resetDemoData()
+      setResetConfirming(false)
+      setResetMsg('デモデータを初期状態に戻しました。')
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      setResetMsg(
+        typeof msg === 'string' ? msg : 'デモデータの初期化に失敗しました',
+      )
+    } finally {
+      setResetBusy(false)
     }
   }
 
@@ -254,6 +278,44 @@ export default function UsersPage() {
           loading={deleteBusy}
           onCancel={() => setDeleting(null)}
           onConfirm={handleDelete}
+        />
+      )}
+
+      <div className="mt-10 border border-ink/10 rounded-sm bg-cream-50 p-5">
+        <span
+          className="block text-[11px] tracking-widest uppercase text-ink-muted mb-2"
+          style={{ fontFamily: 'var(--font-mono)' }}
+        >
+          Demo
+        </span>
+        <p className="text-sm text-ink-muted mb-3">
+          このポートフォリオデモの部門・従業員・作業パターン・稼働表データを初期状態に戻します
+          （管理者アカウントは維持されます）。DEMO_MODE が有効な環境でのみ実行できます。
+        </p>
+        {resetMsg && (
+          <p className="mb-3 text-xs text-ink">{resetMsg}</p>
+        )}
+        <button
+          onClick={() => {
+            setResetMsg('')
+            setResetConfirming(true)
+          }}
+          className="px-4 py-2 text-sm bg-[#a83232] text-white hover:bg-[#8e2828] rounded-sm transition-colors"
+        >
+          デモデータを初期化
+        </button>
+      </div>
+
+      {resetConfirming && (
+        <ConfirmDialog
+          tone="delete"
+          title="デモデータを初期化しますか？"
+          description="部門・従業員・作業パターン・稼働表など、デモの入力データがすべて初期状態に戻ります。この操作は元に戻せません。"
+          confirmLabel="初期化する"
+          loadingLabel="初期化中…"
+          loading={resetBusy}
+          onCancel={() => setResetConfirming(false)}
+          onConfirm={handleResetDemoData}
         />
       )}
       </div>
