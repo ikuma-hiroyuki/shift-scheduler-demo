@@ -1,0 +1,3 @@
+condition_type,condition_value,role,pattern_name
+WEEKDAY,3,CHIEF,G週
+LAST_DAY,0,CHIEF,Gフル

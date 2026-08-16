@@ -1,0 +1,6 @@
+code,name,order_index,rest_days_28_29,rest_days_30,rest_days_31
+CHIEF,主任,0,9,9,10
+DEPUTY,副主任,1,9,9,10
+STAFF,一般,2,9,9,10
+FULLPART,フルパート,3,7,7,7
+MORNINGPART,早朝パート,4,7,7,7

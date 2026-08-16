@@ -1,0 +1,12 @@
+{
+  "name": "DEMO MART 稼働表作成システム",
+  "short_name": "DEMO MART",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FBF9F3",
+  "theme_color": "#00402F",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

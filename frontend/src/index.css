@@ -1,0 +1,121 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* テーマカラートークンのデフォルト（ライトモード）。
+   Tailwind の opacity modifier (`bg-brand-600/5` 等) を有効にするため、値は
+   `R G B` のチャンネル列で保持し、Tailwind 設定側で rgb(var(...) / <alpha-value>) で参照する。
+   ブランドカラーは stores/theme.ts の applyTheme でランタイム上書きされる。 */
+:root {
+  --brand-50: 230 247 241;
+  --brand-100: 194 235 220;
+  --brand-200: 143 217 189;
+  --brand-300: 92 199 158;
+  --brand-400: 45 181 133;
+  --brand-500: 0 156 116;
+  --brand-600: 0 136 102;
+  --brand-700: 0 115 90;
+  --brand-800: 0 92 71;
+  --brand-900: 0 64 47;
+  --cream-50: 251 249 243;
+  --cream-100: 246 243 236;
+  --cream-200: 244 234 215;
+  --ink: 26 29 36;
+  --ink-muted: 90 93 104;
+  --surface: 255 255 255;
+  --surface-muted: 246 243 236;
+}
+
+:root.dark {
+  --cream-50: 26 29 36;
+  --cream-100: 20 23 28;
+  --cream-200: 42 47 56;
+  --ink: 232 234 240;
+  --ink-muted: 160 164 174;
+  --surface: 31 35 43;
+  --surface-muted: 20 23 28;
+}
+
+/* 稼働表グリッドの固定列 */
+.shift-grid-table th:nth-child(1),
+.shift-grid-table td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: rgb(var(--surface));
+}
+.shift-grid-table th:nth-child(2),
+.shift-grid-table td:nth-child(2) {
+  position: sticky;
+  left: 88px;
+  z-index: 2;
+  background: rgb(var(--surface));
+}
+.shift-grid-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgb(var(--brand-700));
+}
+.shift-grid-table thead th:nth-child(1),
+.shift-grid-table thead th:nth-child(2) {
+  z-index: 3;
+}
+
+/* 稼働表詳細表の印刷スタイル (issue #34) */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+  /* .print-area 自体・その子孫・その祖先以外は描画もレイアウトも消す（空白ページ防止） */
+  body *:not(.print-area):not(.print-area *):not(:has(.print-area)) {
+    display: none !important;
+  }
+  html,
+  body {
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+  /* 祖先要素から min-height / 余白 / 背景を除去して .print-area を 1 ページに収める */
+  body :has(.print-area) {
+    min-height: 0 !important;
+    height: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  .print-area {
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: white !important;
+  }
+  .shift-grid-table {
+    font-size: 9px;
+    width: 100% !important;
+    table-layout: fixed;
+  }
+  .shift-grid-table th,
+  .shift-grid-table td {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+    position: static !important;
+  }
+  .shift-grid-table thead {
+    display: table-header-group;
+  }
+  .shift-grid-table tbody tr {
+    page-break-inside: avoid;
+  }
+  .shift-grid-table thead th {
+    background: rgb(var(--brand-700)) !important;
+    color: white !important;
+  }
+}
