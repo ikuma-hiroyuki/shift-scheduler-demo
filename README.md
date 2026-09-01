@@ -927,6 +927,21 @@ Redis・ARQ ワーカーは使わない。稼働表生成は FastAPI プロセ�
 
 フロントエンドとバックエンドは別オリジンになる（Cloudflare Pages は外部オリジンへの200プロキシに非対応のため）。ビルド時に `VITE_API_URL` でバックエンドの絶対URLを埋め込み、バックエンド側は `CORS_ALLOWED_ORIGINS` でフロントのオリジンを許可する。
 
+### Supabase の RLS（Row Level Security）
+
+Supabase は `public` スキーマを PostgREST（Data API）で自動公開するため、RLS 無効のテーブルは
+anon キーを持つ相手から直接読み書きできる（database linter の `rls_disabled_in_public` = ERROR）。
+
+本アプリは PostgREST を使わず SQLAlchemy で直結するだけなので、**ポリシーを 1 つも作らずに
+RLS だけ有効化**するのが正解（PostgREST 経由は全拒否／テーブル所有者はバイパス）。
+migration `0012_enable_rls_on_public_tables` で `public` 全テーブルに適用済みで、デプロイ時に
+`render-start.sh` が `alembic upgrade head` を実行するので本番へも自動反映される。
+
+- `FORCE ROW LEVEL SECURITY` は使わないこと。ポリシーが無い状態で FORCE すると所有者も拒否されアプリが壊れる。
+- 新テーブルを追加する migration では RLS の有効化も忘れずに（`app/tests/test_migration_0012_enable_rls.py` が head 全体の不変条件として検証する）。
+- 有効化後は INFO レベルの `rls_enabled_no_policy` が出るが、この構成では想定どおり。
+- 追加の防御として Supabase ダッシュボードの Settings → API で Data API を無効化する（または exposed schemas から `public` を外す）のも有効。
+
 ### Supabase 接続の注意点
 
 Supabase の Postgres には「直結（5432）」「Session Pooler（5432）」「Transaction Pooler（6543）」の3種類の接続方法がある。Render の Web Service は永続プロセスなので **Session Pooler** を使う。
